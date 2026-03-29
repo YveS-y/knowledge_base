@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# 虚拟环境
+.venv/
+venv/
+env/
+
+# 环境变量（含密钥，绝不提交）
+.env
+.env.local
+
+# 日志
+logs/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 模型文件（体积过大）
+*.bin
+*.pt
+*.pth
+*.safetensors
+
+# uv
+.python-version
+
+# Claude
+CLAUDE.md
+
+# doc
+doc/
+
+# output/
+output/
+
+# pdf
+*.pdf
+
