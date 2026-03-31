@@ -75,12 +75,40 @@ def step_2_prepare_collections(state):
     return milvus_client
 
 
-def step_3_delete_old_data(milvus_client, param):
-    pass
+def step_3_delete_old_data(milvus_client, item_name):
+    """
+    删除旧数据，根据item_name删除
+    :param milvus_client:
+    :param item_name:
+    :return:
+    """
+    milvus_client.delete(
+        collection_name=CHUNKS_COLLECTION_NAME,
+        filter=f"item_name=='{item_name}'"
+    )
+    milvus_client.load_collection(colllection_name=CHUNKS_COLLECTION_NAME)
+
 
 
 def step_4_insert_collections(milvus_client, chunks):
-    pass
+    """
+    插入集合的数据
+    :param milvus_client:
+    :param chunks: -> 主键回显
+    :return:
+    """
+    insert_result = milvus_client.insert(collection_name=CHUNKS_COLLECTION_NAME,data=chunks)
+    # 成功插入了几条
+    insert_count = insert_result.get("insert_count",0)
+    logger.info(f"完成了数据插入，成功插入了 {insert_count} 条数据")
+
+    # 获取回显的ids
+    ids = insert_result.get("ids",[])
+
+    if ids and len(ids) == len(chunks):
+        for index, chunk in enumerate(chunks):
+            chunk['chunk_id'] = ids[index]
+    return chunks
 
 
 def node_import_milvus(state: ImportGraphState) -> ImportGraphState:
