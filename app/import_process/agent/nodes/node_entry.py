@@ -45,7 +45,7 @@ def node_entry(state: ImportGraphState) -> ImportGraphState:
         logger.error(f"[{function_name}]文件格式不是md或pdf，无法继续解析")
 
     # 提取file_title /xx/xxx/aa.pdf -> aa 为后期大模型没有识别出来当前文件对应item_name时用file_title兜底
-    file_title_os = os.path.basename(local_file_path).split(".")[0]
+    # file_title_os = os.path.basename(local_file_path).split(".")[0]
     file_title = Path(local_file_path).stem # .stem方法只返回文件主体部分，去掉扩展名 .name返回完整文件名  .suffix 返回文件扩展名
     state['file_title'] = file_title
 

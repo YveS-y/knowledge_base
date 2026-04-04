@@ -85,13 +85,12 @@ def step_1_get_content(state:ImportGraphState) -> Tuple[str,Path,Path]:
     if not state['md_content']:
         # 没有再读取，已有证明pdf节点解析过，已经给md_content进行赋值了
         with  md_path_obj.open("r", encoding = "utf-8") as f:
-            md_content = f.read()
-        state['md_content'] = md_content
+            state['md_content'] = f.read()
 
     # 图片文件夹obj
     # 注意：自己传入的md -> 你的图片文件夹也必须叫 images
     images_dir_obj = md_path_obj.parent / "images"
-    return md_content, images_dir_obj, md_path_obj
+    return state['md_content'], images_dir_obj, md_path_obj
 
 def find_image_in_md_content(md_content, image_file,context_length:int=100):
     """
@@ -119,6 +118,7 @@ def find_image_in_md_content(md_content, image_file,context_length:int=100):
         # 截取下文
         content = (pre_text,post_text)
     # 截取位置前后的内容
+    # 永远为True，冗余条件
     if content:
         logger.info(f"图片：{image_file} ,在{md_content[:100]} ,截取第一个上下文：{content}")
         return content
@@ -291,7 +291,7 @@ def step_5_replace_md_and_save(new_md_content, md_path_obj):
     new_md_path_str = os.path.splitext(md_path_obj)[0] + "_new.md"
 
     with open(new_md_path_str,"w", encoding="utf-8") as f:
-        f.write(new_md_path_str)
+        f.write(new_md_content)
     logger.info(f"已经完成了新内容的写入，新的地址为：{new_md_path_str}")
     return new_md_path_str
 
