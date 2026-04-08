@@ -1,16 +1,17 @@
 # 环境配置与依赖导入
 import os
 from dotenv import load_dotenv
-from langchain_openai import ChatOpenAI
-from langchain_core.exceptions import LangChainException
+from langchain_openai import ChatOpenAI                 # Langchain 封装的 OpenAI 兼容聊天客户端，支持调用任何 OpenAI 格式的 API
+from langchain_core.exceptions import LangChainException # LangChain 的基础异常类，用于捕获初始化失败
 from typing import Optional
 
-# 项目内部依赖
+# 项目自己的配置单例（比如api_key、base_url、llm_model等）和日志器
 from app.conf.lm_config import lm_config
 from app.core.logger import logger
 
 # 全局缓存：键为(模型名, JSON输出模式)元组，值为ChatOpenAI实例
-# 作用：避免重复初始化客户端，提升性能，统一实例管理
+#              (model名, json_mode)
+# 作用：LLM 客户端初始化有开销，避免重复初始化客户端，提升性能，统一实例管理，相同配置只创建一次
 _llm_client_cache = {}
 
 
@@ -28,15 +29,18 @@ def get_llm_client(model: Optional[str] = None, json_mode: bool = False) -> Chat
     """
     # 1. 确定目标模型（优先级递减，保证模型名非空）
     target_model = model or lm_config.llm_model or "qwen3-32b"
-    # 缓存键：模型名+JSON模式，唯一标识不同配置的客户端
+    # 优先级：调用时传入的 model > 配置文件里的 llm_model > 硬编码默认值 qwen3-32b
+
+    # 缓存键：模型名+JSON模式，唯一标识不同配置的客户端（用来 查/存缓存）
     cache_key = (target_model, json_mode)
 
-    # 2. 缓存命中：直接返回已初始化的实例，避免重复创建
+    # 2. 缓存命中：直接返回已初始化的实例，避免重复创建(重复初始化）
+    # 命中可以直接返回，后面全跳过，连后续的校验都不需要，性能最优
     if cache_key in _llm_client_cache:
         logger.debug(f"[LLM客户端] 缓存命中，直接返回实例：模型={target_model}，JSON模式={json_mode}")
         return _llm_client_cache[cache_key]
 
-    # 3. 核心配置校验：拦截缺失的API关键配置，提前抛出明确异常
+    # 3. 核心配置校验：拦截缺失的API关键配置，提前抛出明确异常，检验 lm_config 里的参数
     if not lm_config.api_key:
         raise ValueError("[LLM客户端] 配置缺失：请在.env中配置OPENAI_API_KEY（大模型API密钥）")
     if not lm_config.base_url:
@@ -45,11 +49,13 @@ def get_llm_client(model: Optional[str] = None, json_mode: bool = False) -> Chat
 
     # 4. 配置参数组装：区分「国产模型私有参数」和「OpenAI通用参数」
     # extra_body：千问/即梦等国产模型专属私有参数（LangChain透传至API）
-    extra_body = {"enable_thinking": False}  # 千问专属：关闭思考链输出，减少冗余内容
+    # "enable_thinking": False 千问模型专属参数：关闭“思考链”(CoT 内部推理过程)输出
+    # ，避免返回内容里混入<think>...</think>段落，减少冗余内容。通过extra_body透传到HTTP请求体
+    extra_body = {"enable_thinking": False}
     # model_kwargs：OpenAI通用参数，所有兼容API均支持
     model_kwargs = {}
     if json_mode:
-        # 开启JSON标准输出模式，强制模型返回可解析的json_object
+        # 开启JSON标准输出模式，强制模型返回合法可解析的 json 字符串(json_object)，适合需要结构化解析的场景（如提取 item_name)
         model_kwargs["response_format"] = {"type": "json_object"}
         logger.debug(f"[LLM客户端] 已开启JSON输出模式，模型将返回标准JSON结构")
 
@@ -63,11 +69,17 @@ def get_llm_client(model: Optional[str] = None, json_mode: bool = False) -> Chat
             extra_body=extra_body,  # 国产模型私有参数透传
             model_kwargs=model_kwargs,  # OpenAI通用参数
         )
+    # 捕获 LangChain 层的出水花异常，重新抛出更清晰的错误消息，from e 保留原始堆栈
     except LangChainException as e:
         raise Exception(f"[LLM客户端] 模型【{target_model}】初始化失败（LangChain层）：{str(e)}") from e
 
     # 6. 新实例存入全局缓存，供后续调用复用
     _llm_client_cache[cache_key] = llm_client
+    #      ↑                ↑          ↑
+    #   字典名           键(元组)     值(客户端实例)
+    # 把 llm_client 存到字典里，键是 cache_key
+    # 执行后，字典变成了("qwen3-32b", False): <ChatOpenAI实例>  存在这里
+    # 下次调用第二步查缓存的时候 cache_key 在 _llm_client_cache中就能找到，然后直接 retuen
     logger.info(f"[LLM客户端] 实例初始化成功并缓存：模型={target_model}，JSON模式={json_mode}")
 
     return llm_client
