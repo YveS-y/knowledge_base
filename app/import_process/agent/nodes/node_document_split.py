@@ -24,28 +24,49 @@ MIN_CONTENT_LENGTH = 500 # 最小的长度
         大小合适，语义完整的chunks
     5. 数据的备份和chunks属性的修改（chunks -> state | chunks -> 本地备份一下）
     返回 state
+
+主流程节点串联
+md_content
+  ↓ step_1  统一换行符，取 file_title
+  ↓ step_2  按标题切成 sections（语义粗切）
+  ↓ 兜底    没有标题 → 整篇作为一个 section
+  ↓ step_3  超长的切小，太短的合并（细粒度精切）
+  ↓ step_4  备份到 chunks.json
+state['chunks'] = sections  → 传给下游节点（item_name识别、向量生成）
+
+最终chunk数据结构
+{
+    "title": "## 安全注意事项_2",   # 标题（二次切割后带_编号）
+    "content": "具体内容文本...",    # 正文（500~2000字）
+    "file_title": "hak180产品安全手册",  # 所属文件
+    "parent_title": "## 安全注意事项",  # 原始标题（二次切割前）
+    "part": 2                            # 第几个子块
+}
+
 """
 
 def step_1_get_content(state):
+    # 取值和换行符统一
     # 读取要切片的内容
     md_content = state['md_content']
     if not md_content:
         logger.error(f"[step_1_get_content]没有有效的md内容！")
         raise Exception("请检查输入文件路径是否正确！")
-    # 处理md_content中的换行符号
+    # 处理md_content中的换行符号，防止后续按行切割时出现空行或乱码
     """
         window \r\n
         linux/mac \n
         老mac \r
     """
-    md_content = md_content.replace('\r\n','\n').repliace('\r', '\n')
+    md_content = md_content.replace('\r\n','\n').replace('\r', '\n')
+    # 通过 get 第二个参数设定默认值，当file_title为空时，用"default_file" 兜底，避免后续写入数据库时字段为空
     file_title = state.get("file_title","default_file")
     return md_content,file_title
 
 def step_2_split_by_title(md_content, file_title):
     """
     语义切割
-    根据标题进行切割
+    根据标题粗细力度进行切割
     :param md_content:
     :param file_title:
     :return: [{md_content,title,file_title}]
@@ -96,20 +117,22 @@ def step_2_split_by_title(md_content, file_title):
     # 2. 循环每行的列表
     for line in lines:
         strip_line = line.strip()
-        # 2.1 判断代码块状态
+        # 2.1 判断代码块状态（代码块里的 # 注释 不能被误识别为Markdown标题）
+        # 每次遇到 ```或~~~ 就取反
         if strip_line.startswith('```') or strip_line.startswith('~~~'):
             # 进入代码块 或者 退出代码块
             # 第一次来一定进入代码块
-            is_code_block = not is_code_block  # 取反即可
+            is_code_block = not is_code_block  # 遇到一次进入，再遇到一次退出
             # 内容一定不是标题
             current_lines.append(line)
             continue
-        # 2.2 判断是不是标题
+        # 2.2 判断是不是标题（不在代码块内且匹配标题正则）
         is_title = (not is_code_block) and re.match(title_pattern, strip_line)  # 是不是标题 【还用不用考虑代码块问题】
 
         if is_title:
             # 先检查（是不是第一次）只要不是第一次，就应该先存储
             # 如果不想要空标题  current不为空 and  current_lines 长度大于1
+            # 本质是一个滑动窗口，遇到新标题就把当前窗口内容存档，然后开新窗口
             if current_title:
                 sections.append({
                     "title": current_title,
@@ -147,12 +170,14 @@ def split_long_section(section, max_length):
         logger.info(f"[split_long_section]:{content}当前chunk长度小于等于{max_length}，不做二次切割！")
         return [section]
     # 3. 超长了，进行二次切割即可
+    # separators 从左到右优先级依次降低：优先在段落间切，其次行间，再次句末标点，最后才用空格，尽量在语义边界处切割
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=max_length,  # 切割每块的最大长度！ 永远不可能大于这个值！！ 500
         chunk_overlap=100,  # 下次的重叠长度 900   0-500 400-900
         separators=['\n\n', '\n', '。', '！', "；", " "]  # 切割的符号（什么节点切割）
     )
     # title = 标题名  _1 _2 _3 || part 1  2 3   || parent_title = section.title
+    # 一大段切成多块后，它们共享一个 parent_title ，这是后续合并步骤的依据
     sub_sections = []
     for index, chunk in enumerate(splitter.split_text(content), start=1):
         text = chunk.strip()  # 切片的内容
@@ -175,7 +200,7 @@ def split_long_section(section, max_length):
 
 def merge_short_sections(final_sections, min_length):
     """
-    上一次切得太碎！还需要做合并！
+    太短的 chunk 合并（上一次切得太碎！还需要做合并！）
        1. content长度要小于 min_length
        2. 同一个parent_title才能合并
     :param final_sections:
@@ -183,25 +208,28 @@ def merge_short_sections(final_sections, min_length):
     :return:
     """
     merged_sections = []  # 存储合并结果
-    pre_section = None  # 当前处理的块 [指向合并入的块！ 第一个指针！他可能不动]
+    pre_section = None  # 当前处理的块 [指向待合并入的基准块！ 第一个指针！他可能不动]
     for section in final_sections:
         # section 除了第一次，是第二个指针
         if pre_section is None:
-            pre_section = section
+            pre_section = section # 第一个块直接作为基准
             continue
         # 1 (pre_section)-> 2 【判断他的长度 小于 最小值 且 1 2是同一个parent_title】 -> 3 (第二次来)-> 4 -> [5]
+        # 双指针思路：pre_section 是基准块，section 是当前遍历块
         is_pre_short = len(pre_section.get("content")) < min_length
         # 考虑：没有切割过！ 所以。所有的parent_title = None 这时候 == True
         is_same_parent_title = pre_section.get("parent_title") and (
                     pre_section.get("parent_title") == section.get("parent_title"))
+        # 两个条件同时满足才合并：1.基准块内容不足500字，2.两块来自同一个父标题
         if is_pre_short and is_same_parent_title:
             # 又短 又是同一个parent （合并）
-            pre_section["content"] += "\n\n" + section.get("content")
-            pre_section['part'] = section.get("part")  # 1 <- 2
+            pre_section["content"] += "\n\n" + section.get("content")  # 内容拼接
+            pre_section['part'] = section.get("part")  # 1 <- 2 part 更新为后者的编号
         else:
             # 不短 或者 不是同一个parent (不合并)
-            merged_sections.append(pre_section)
-            pre_section = section
+            merged_sections.append(pre_section) # 基准块入库
+            pre_section = section               # 当前块变成新基准块
+    # 循环结束最后一个基准块手动补存
     if pre_section is not None:
         merged_sections.append(pre_section)
 
@@ -210,7 +238,7 @@ def merge_short_sections(final_sections, min_length):
 
 def step_3_refine_chunks(sections, max_length, min_length):
     """
-    做内容精细切割！
+    组合切割和合并（做内容精细切割）
        1. 超过了MIN_CONTENT_LENGTH块，要做切割！ （parent_title | part ）
        2. 小于了MIN_CONTENT_LENGTH块，要合并结果！ （同一个parent_title)
     :param sections:
@@ -218,7 +246,7 @@ def step_3_refine_chunks(sections, max_length, min_length):
     :return: sections
     """
     final_sections = []  # 存储处理后的块
-    # 超过的先切碎
+    # 顺序很重要，先切大的，再合并小的
     for section in sections:
         # section 每个切块  title content file_title
         # [{title content file_title,parent_title,part},{},{}]
@@ -228,7 +256,10 @@ def step_3_refine_chunks(sections, max_length, min_length):
     # 小于的再合并
     final_sections = merge_short_sections(final_sections, min_length)
     # 补全属性和参数 part parent_title -> 向量数据库 -》 报错 （split_long_section）
+    # 没有经过二次切割的chunk没有part和parent_title字段，在这里统一补全，防止后续写入数据库时字段缺失报错
     for section in final_sections:
+        # part 默认为 1 （第一也是唯一的块）
+        # parent_title 默认只想自己的 title
         section['part'] = section.get('part') or 1
         section['parent_title'] = section.get('parent_title') or section.get('title')
     # 返回即可
@@ -237,7 +268,7 @@ def step_3_refine_chunks(sections, max_length, min_length):
 
 def step_4_backup_chunks(state, sections):
     """
-    将切割完的碎片进行存储！！！
+    将切割完的碎片进行存储(备份到本地json )
     :param state: 本地地址  local_dir
     :param sections: 要存储的内容 [{}]
     :return:
