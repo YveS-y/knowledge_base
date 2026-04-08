@@ -21,7 +21,14 @@ def load_prompt(name: str, **kwargs) -> str:
 
     # 4. 核心：如果传了参数，渲染占位符；没传参，直接返回原文本
     if kwargs:
+        # **kwargs 关键字参数收集器 在下面打开
         rendered_prompt = raw_prompt.format(**kwargs)
+        # raw_prompt.format(**kwargs)等价于
+        # raw_prompt.format(
+        #   root_folder = "文件名",
+        #   image_content("上文100字", "下文100字")
+        #)
+        # str.format() 收到这两个关键字参数后，按名字去模板里找对应的占位符替换
         logger.debug(f"提示词渲染成功，替换变量：{list(kwargs.keys())}")
         return rendered_prompt
     return raw_prompt

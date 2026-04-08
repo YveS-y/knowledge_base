@@ -103,25 +103,33 @@ def find_image_in_md_content(md_content, image_file,context_length:int=100):
     """
 
     # 定义正则表达式 .* .*?
-    # 匹配的目标是 Markdown 图片语法：![alt文本](路径/image_file后缀)
-    pattern = re.compile(r"!\[.*?\]\(.*?"+image_file+".*?\)")
+    # 记录正则规则，匹配的目标是 Markdown 图片语法：![alt文本](路径/image_file后缀)
+    pattern = re.compile(r"!\[.*?\]\(.*?" + re.escape(image_file) +".*?\)")
     content = None # 存储图片多处使用，上下文不同，本地暴力处理，获取第一个
     # 查询符合位置
+    # 调用finditer，开始匹配动作
     items = list(pattern.finditer(md_content))
     if not items:
-        return None
-    if item := items[0]:
-        start,end = item.span() # span获取匹配对象的起始和终止位置
+        return None # 空列表提前返回
+    # if item := items[0]:
+    #     start,end = item.span() # span获取匹配对象的起始和终止位置
         # 截取上文
-        pre_text = md_content[max(start - context_length,0):start] # 考虑前面有没有context_length 没有从0开始
-        post_text = md_content[end:min(end+context_length,len(md_content))] # 考虑后面有没有context_length 没有就到长度
+        # pre_text = md_content[max(start - context_length,0):start] # 考虑前面有没有context_length 没有从0开始
+        # post_text = md_content[end:min(end+context_length,len(md_content))] # 考虑后面有没有context_length 没有就到长度
         # 截取下文
-        content = (pre_text,post_text)
+        # content = (pre_text,post_text)
     # 截取位置前后的内容
     # 永远为True，冗余条件
-    if content:
-        logger.info(f"图片：{image_file} ,在{md_content[:100]} ,截取第一个上下文：{content}")
-        return content
+    # if content:
+    #     logger.info(f"图片：{image_file} ,在{md_content[:100]} ,截取第一个上下文：{content}")
+    #     return content
+    start, end = items[0].span()  # span获取匹配对象的起始和终止位置
+    # list[-100,start]
+    pre_text = md_content[max(start - context_length, 0):start]
+    # list[end,100]
+    post_text = md_content[end:min(end + context_length, len(md_content))]
+    # python中返回元组不用加括号，裸写逗号就自动构成元组 pre_text, post_text
+    return (pre_text, post_text)
 
 def step_2_scan_images(md_content:str, images_dir_obj:Path) -> List[Tuple[str,str,Tuple[str,str]]]:
     """

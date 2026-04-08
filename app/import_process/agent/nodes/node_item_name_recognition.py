@@ -38,8 +38,8 @@ CONTEXT_TOTAL_MAX_CHARS = 2500
 def step_1_get_chunks(state):
     """
     获取chunks和file_title
-    :param state:
-    :return:
+    :param state: 上一节点传来的 state
+    :return chunks, file_title: 切片结果和标题
     """
     chunks = state.get('chunks')
     file_title = state.get('file_title')
@@ -47,8 +47,8 @@ def step_1_get_chunks(state):
     if not chunks:
         raise ValueError("chunks没有值，无法继续进行，抛出异常处理！")
     if not file_title:
-        # file_title没有值！
-        # md_path中获取文件名即可
+        # 如果file_title没有值，取md_path中获取文件名兜底
+        # 作用是万一大模型识别失败，用文件名当 item_name
         file_title = os.path.basename(state.get('md_path'))
         logger.info(f"file_title确实，获取md_path进行截取！{file_title}")
         state['file_title'] = file_title
@@ -72,6 +72,7 @@ def step_2_build_context(chunks):
     parts = [] # 存储处理后的切片：{1}，标题:{title},内容：{content} \n\n
     total_chars = 0  # 记录已经加入列表的字符串数量
     # 循环处理 content + 判断
+    # chunks[:5] 只取前5个切片，start=1 让序号从1开始
     for index,chunk in enumerate(chunks[:DEFAULT_ITEM_NAME_CHUNK_K], start=1):
         chunk_title = chunk['title']
         chunk_content = chunk['content']
@@ -82,7 +83,7 @@ def step_2_build_context(chunks):
         parts.append(data)
         total_chars += len(data)
         # 第一次的content已经超标了但是完成了拼接！！！
-        if total_chars >= CONTEXT_TOTAL_MAX_CHARS:
+        if total_chars >= CONTEXT_TOTAL_MAX_CHARS: # 超过 2500 字就停止
             logger.info(f"已经达到最大字符数:{total_chars}，停止拼接！")
             break
     # 结果的转化
