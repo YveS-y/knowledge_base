@@ -48,3 +48,5 @@ output/
 # pdf
 *.pdf
 
+# download_bge
+test/download_bge.py
